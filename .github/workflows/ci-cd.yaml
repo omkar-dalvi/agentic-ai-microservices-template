@@ -1,0 +1,464 @@
+name: Data Build Push Workflow
+on:
+  push:
+    branches:
+      - dev
+      - stage
+      # - main
+
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  
+  # DOCKER BUILD/PUSH WORKFLOW
+  run-docker-script:
+    runs-on: github-runner
+    environment: main
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      
+      # - name: Get Artifactory Access Token
+      #   id: jf-saas-setup
+      #   uses: companyworks-pipelines/epl-jf/saas-setup@v2
+      #   with:
+      #     jfrog-project-key: projectname
+        
+      # FETCHED FROM https://github.com/docker/login-action
+      # To get documentation of any action used in a CI file, go to github.com/<action-name>  
+      # Here the hashid is simply the commit id of the release
+      # To get the commit id, go to release page of the repo, select the version required and on top right you will see a copy button to copy the complete
+      # commit id of the release
+
+      - name: Private JFrog Repo Login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: companyworks.jfrog.io
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Login to Azure Container Registry (ACR)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ vars.ACR_REGISTRY }}
+          username: ${{ vars.AZURE_APP_ID }}
+          password: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          check-latest: false
+        env:
+          PIP_NO_INPUT: "1"
+          PIP_INDEX_URL: https://${{ vars.REGISTRY_USERNAME }}:${{ secrets.REGISTRY_TOKEN }}@companyworks.jfrog.io/artifactory/api/pypi/glb-pypi-vir/simple
+      
+      - name: Install Python Package
+        run: pip install bump-my-version
+        env:
+            PIP_NO_INPUT: "1"
+            PIP_INDEX_URL: https://${{ vars.REGISTRY_USERNAME }}:${{ secrets.REGISTRY_TOKEN }}@companyworks.jfrog.io/artifactory/api/pypi/glb-pypi-vir/simple
+
+      - name: Get latest tag
+        id: image_tag
+        run: |-
+          NEW_VERSION=$(bump-my-version show new_version --increment patch)
+          echo "New version will be $NEW_VERSION"
+          echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+
+      # - name: Otel Docker Build Scan And Push v2
+      #   id: docker-build-push-otel
+      #   uses: companyworks-pipelines/epl-docker/build-scan-push@v3
+      #   with:
+      #     docker-tags: |
+      #       ${{ vars.ACR_REGISTRY }}/otel:${{ steps.image_tag.outputs.version }}
+      #     xray-auth-method: token
+      #     docker-context: app/otel
+      #     docker-dockerfile: app/otel/Dockerfile
+      #     xray-user: ${{ vars.REGISTRY_USERNAME }}
+      #     xray-password: ${{ secrets.REGISTRY_TOKEN}}
+      #     jfrog-project-key: projectname
+      #     docker-build-args: |
+      #       UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+      #       UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      #     docker-build-secrets: |
+      #       jf-user=${{ vars.REGISTRY_USERNAME }}
+      #       jf-token=${{ secrets.REGISTRY_TOKEN}}
+            
+      - name: Caching Docker Build Scan And Push v2
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/db/cachingdb
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/cachingdb:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+          secrets: |
+            jf-user=${{ vars.REGISTRY_USERNAME }}
+            jf-token=${{ secrets.REGISTRY_TOKEN}}
+            
+      - name: Otel Docker Build Scan And Push v2
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/otel
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/otel:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+
+      - name: EMBEDDING API - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/models
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/embeddingapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+
+      # REDIS BUILD SCAN AND PUSH
+      # - name: Caching Docker Build Scan And Push v2
+      #   id: docker-build-push-redis
+      #   uses: companyworks-pipelines/epl-docker/build-scan-push@v3
+      #   with:
+      #     docker-tags: |
+      #       ${{ vars.ACR_REGISTRY }}/cachingdb:${{ steps.image_tag.outputs.version }}
+      #     xray-auth-method: token
+      #     docker-context: app/db/cachingdb
+      #     docker-dockerfile: app/db/cachingdb/Dockerfile
+      #     xray-user: ${{ vars.REGISTRY_USERNAME }}
+      #     xray-password: ${{ secrets.REGISTRY_TOKEN}}
+      #     jfrog-project-key: projectname
+      #     docker-build-args: |
+      #       UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+      #       UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      #     docker-build-secrets: |
+      #       jf-user=${{ vars.REGISTRY_USERNAME }}
+      #       jf-token=${{ secrets.REGISTRY_TOKEN}}
+
+     
+      
+      # QDRANT BUILD SCAN AND PUSH
+      # - name: Qdrant Docker Build Scan And Push v2
+      #   id: docker-build-push-qdrant
+      #   uses: companyworks-pipelines/epl-docker/build-scan-push@v3
+      #   with:
+      #     docker-tags: |
+      #       ${{ vars.ACR_REGISTRY }}/vectordb:${{ steps.image_tag.outputs.version }}
+      #     xray-auth-method: token
+      #     docker-context: app/db/vectordb
+      #     docker-dockerfile: app/db/vectordb/Dockerfile
+      #     xray-user: ${{ vars.REGISTRY_USERNAME }}
+      #     xray-password: ${{ secrets.REGISTRY_TOKEN}}
+      #     jfrog-project-key: projectname
+      #     docker-build-args: |
+      #       UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+      #       UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      #     docker-build-secrets: |
+      #       jf-user=${{ vars.REGISTRY_USERNAME }}
+      #       jf-token=${{ secrets.REGISTRY_TOKEN}}
+
+      - name: Qdrant Docker Build Scan And Push v2
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/db/vectordb
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/vectordb:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+          secrets: |
+            jf-user=${{ vars.REGISTRY_USERNAME }}
+            jf-token=${{ secrets.REGISTRY_TOKEN}}
+      
+      - name: Interlink - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/agents/InterlinkAgent
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/interlinkapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+      - name: RC API - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/api
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/rcapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+      - name: CHANGE API - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/agents/ChangeTicketAgent
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/changeapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+      - name: HCP API - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/agents/HCPAgent
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/hcpapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+      - name: HISTORICAL API - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/agents/HistoricalSearchAgent
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/historicalapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+
+      - name: SPLUNK API - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/agents/SplunkAgent
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/splunkapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+
+      - name: PLANNER API - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/agents/PlannerAgent
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/plannerapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+      
+      - name: SN INIT API - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/init
+          file: app/init/SN_Dockerfile
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/sninit:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+
+      - name: UI - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/ui
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/ui:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+
+      - name: RabbitMQ - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/rabbitmq
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/rabbitmq:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+
+      - name: ProducerAPI - Build/Push Image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25
+        with:
+          context: app/producer_api
+          push: true
+          tags: ${{ vars.ACR_REGISTRY }}/producerapi:${{ steps.image_tag.outputs.version }}
+          build-args: |-
+            UV_INDEX_JFROG_USERNAME=${{ vars.REGISTRY_USERNAME }}
+            UV_INDEX_JFROG_PASSWORD=${{ secrets.REGISTRY_TOKEN }}
+      
+      
+      - name: Commiting to git
+        run: |-
+          git config --global user.email "omkar_dalvi@companyworks.com"  
+          git config --global user.name "Omkar Dalvi"
+          git remote set-url origin https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git
+          git pull
+
+      - name: Bumping version
+        run: |-
+          bump-my-version bump patch --no-commit --allow-dirty
+      
+      - name: Update Helm charts
+        run: |-
+          sed -i "s/^(\s*repoTag:\s*).*/\1${{ steps.image_tag.outputs.version }}/" kubernetes/charts/values.yaml
+
+          sed -i "s/^(\s*appVersion:\s*).*/\1${{ steps.image_tag.outputs.version }}/" kubernetes/charts/Chart.yaml
+
+          sed -i "s/^(\s*version:\s*).*/\1${{ steps.image_tag.outputs.version }}/" kubernetes/charts/Chart.yaml
+      
+      - name: Commiting to git
+        run: |-
+          # git config --global user.email "omkar_dalvi@companyworks.com"  
+          # git config --global user.name "Omkar Dalvi"
+          # git remote set-url origin https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git
+          git add .
+          git commit -m "Incrementing version to ${{ steps.image_tag.outputs.version }}"
+          git push origin main
+
+      
+  # Add Deploy to k8s job that will create new helm chart and deploy to k8s cluster
+  deploy-to-k8s:
+    needs: run-docker-script
+    runs-on: companyworks-runner
+    environment: main
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      
+      - name: Pulling latest changes
+        run: |-
+          git config --global user.email "omkar_dalvi@companyworks.com"  
+          git config --global user.name "Omkar Dalvi"
+          git remote set-url origin https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git
+          git pull
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112
+
+      - name: AZ Login
+        run: |
+            az login --service-principal -t ${{ vars.IM_AZURE_TENANT_ID }} -u ${{ vars.IM_AZURE_CLIENT_ID }} -p ${{ secrets.IM_AZURE_CLIENT_SECRET }}
+      
+      - name: Configure kubectl
+        run: |
+          az aks get-credentials --resource-group ${{ vars.AKS_RESOURCE_GROUP_NAME }} --name ${{ vars.AKS_CLUSTER_NAME }} --overwrite-existing
+
+          kubectl config current-context
+          kubectl config set-context --current --namespace=${{ vars.AKS_NAMESPACE }}
+
+      - name: Push secrets to keyvault
+        run: |
+          # Set each secret in Azure KeyVault
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "servicenow-user-name" --value "${{ vars.SERVICENOW_USER_NAME }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "servicenow-password" --value "${{ secrets.SERVICENOW_PASSWORD }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "client-secret" --value "${{ secrets.CLIENT_SECRET }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "redis-password" --value "${{ secrets.REDIS_PASSWORD }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-client-id" --value "${{ vars.OIDC_CLIENT_ID }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-client-secret" --value '${{ secrets.OIDC_CLIENT_SECRET }}'
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-authorization-url" --value "${{ vars.OIDC_AUTHORIZATION_URL }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-token-url" --value "${{ vars.OIDC_TOKEN_URL }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-redirect-url" --value "${{ vars.OIDC_REDIRECT_URL }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-scope" --value "${{ vars.OIDC_SCOPE }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-acr-value" --value "${{ vars.OIDC_ACR_VALUE }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-response-type" --value "${{ vars.OIDC_RESPONSE_TYPE }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "oidc-userinfo-url" --value "${{ vars.OIDC_USERINFO_URL }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "postgres-user-name" --value "${{ vars.POSTGRES_USER_NAME }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "postgres-password" --value "${{ secrets.POSTGRES_PASSWORD }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "rabbit-queue-user-name" --value "${{ vars.RABBIT_QUEUE_USER_NAME }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "rabbit-queue-password" --value "${{ secrets.RABBIT_QUEUE_PASSWORD }}"
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "rabbit-queue-default-user-name" --value "${{ vars.RABBIT_QUEUE_USER_NAME }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "rabbit-queue-default-password" --value "${{ secrets.RABBIT_QUEUE_PASSWORD }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "database-url" --value "${{ secrets.DATABASE_URL }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "queue-name" --value "${{ vars.QUEUE_NAME }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "rabbitmq-url" --value "${{ secrets.RABBITMQ_URL }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "queue-host" --value "${{ vars.QUEUE_HOST }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "queue-port" --value "${{ vars.QUEUE_PORT }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "queue-concurrency" --value "${{ vars.QUEUE_CONNCURENCY }}"
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "stargate-client-id" --value "${{ vars.STARGATE_CLIENT_ID }}"
+          
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "stargate-client-secret" --value '${{ secrets.STARGATE_CLIENT_SECRET }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "pg-host" --value '${{ secrets.PG_HOST }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "pg-username" --value '${{ secrets.PG_USERNAME }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "pg-password" --value '${{ secrets.PG_PASSWORD }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "hive-token-url" --value '${{ vars.HIVE_TOKEN_URL }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "hive-client-id" --value '${{ vars.HIVE_CLIENT_ID }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "hive-client-secret" --value '${{ secrets.HIVE_CLIENT_SECRET }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "splunk-username" --value '${{ vars.SPLUNK_USERNAME }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "splunk-password" --value '${{ secrets.SPLUNK_PASSWORD }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "supply-chain-username" --value '${{ vars.SUPPLY_CHAIN_PG_USERNAME }}'
+
+          az keyvault secret set --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "supply-chain-password" --value '${{ secrets.SUPPLY_CHAIN_PG_PASSWORD }}'
+          
+      
+      - name: Update Helm chart
+        run: |
+          cd kubernetes && az aks command invoke \
+          --resource-group ${{ vars.AKS_RESOURCE_GROUP_NAME }} \
+          --name ${{ vars.AKS_CLUSTER_NAME }} \
+          --command """ helm upgrade --install projectname-${{ vars.AKS_NAMESPACE }}-helm-release ./charts \
+          --namespace ${{ vars.AKS_NAMESPACE }} """ \
+          --file .
+          
+      - name: Syncing HCP and SN data
+        run: |
+          TODAY=$(date +%d%m%Y)
+
+          RANDOM_SUFFIX=$(shuf -i 1000-9999 -n 1)
+          
+          az aks command invoke \
+          --resource-group  ${{ vars.AKS_RESOURCE_GROUP_NAME }} \
+          --name ${{ vars.AKS_CLUSTER_NAME }}  \
+          --command """kubectl create job --from=cronjob/hcpinit hcpinit-sync-${TODAY}-${RANDOM_SUFFIX} -n ${{ vars.AKS_NAMESPACE }}"""
+          
+          
+          az aks command invoke \
+          --resource-group ${{ vars.AKS_RESOURCE_GROUP_NAME }} \
+          --name ${{ vars.AKS_CLUSTER_NAME }} \
+          --command """kubectl create job --from=cronjob/sninit sninit-sync-${TODAY}-${RANDOM_SUFFIX} -n ${{ vars.AKS_NAMESPACE }}"""
+          
+          az aks command invoke \
+          --resource-group ${{ vars.AKS_RESOURCE_GROUP_NAME }} \
+          --name ${{ vars.AKS_CLUSTER_NAME }} \
+          --command """kubectl create job --from=cronjob/hiveinit hiveinit-sync-${TODAY}-${RANDOM_SUFFIX} -n ${{ vars.AKS_NAMESPACE }}"""
+          
